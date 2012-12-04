@@ -1,7 +1,8 @@
 var http = require("http"),
     httpProxy = require("http-proxy"),
     url = require("url"),
-    sys = require("sys");
+    sys = require("sys"),
+    net = require("net");
 
 
 var port = 8080;
@@ -18,11 +19,14 @@ function cacheable(req, res) {
   return req.method == "GET" && res.statusCode == 200;
 }
 
+function logRequest(req, cached) {
+  sys.puts((cached ? "HIT" : "MISS") + " " + req.method + " " + req.url);
+}
+
 server = httpProxy.createServer( function (req, res, proxy) {
   var cacheObject = cache[cacheKey(req)];
 
-  // log method and url
-  sys.puts((cacheObject ? "HIT" : "MISS") + " " + req.method + " " + req.url);
+  logRequest(req, cacheObject);
 
   if (cacheObject) {
     // do the opposite of what proxyRequest does
@@ -34,7 +38,6 @@ server = httpProxy.createServer( function (req, res, proxy) {
   }
   else {
     uri = url.parse(req.url);
-    https = uri.protocol == "https"
 
     var _writeHead = res.writeHead;
     res.writeHead = function(statusCode, headers) {
@@ -51,10 +54,8 @@ server = httpProxy.createServer( function (req, res, proxy) {
     proxy.proxyRequest(req, res, {
       target: {
         host: uri.host,
-        port: uri.port || (https ? 443 : 80),
-        https: https
-      },
-      buffer: httpProxy.buffer(req)
+        port: uri.port || 80
+      }
     });
   }
 });
@@ -67,6 +68,21 @@ server.proxy.on("end", function(req, res) {
       buffer: res.buffer
     };
   }
+});
+
+server.on("connect", function(req, socket, head) {
+  logRequest(req, false);
+
+  // URL is in the form 'hostname:port'
+  var parts = req.url.split(':', 2);
+  // open a TCP connection to the remote host
+  var conn = net.connect(parts[1], parts[0], function() {
+    // respond to the client that the connection was made
+    socket.write("HTTP/1.1 200 OK\r\n\r\n");
+    // create a tunnel between the two hosts
+    socket.pipe(conn);
+    conn.pipe(socket);
+  });
 });
 
 server.listen(port);
